@@ -6,12 +6,16 @@ import android.app.ActivityManager
 import android.content.*
 import android.content.pm.PackageManager
 import android.os.*
+import android.provider.Settings
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.speech.tts.TextToSpeech
+import android.util.Log
 import android.view.inputmethod.EditorInfo
 import android.widget.*
 import androidx.activity.viewModels
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -21,13 +25,16 @@ import com.mawa.assistant.R
 import com.mawa.assistant.ai.AudioEngine
 import com.mawa.assistant.ai.CommandParser
 import com.mawa.assistant.ai.GeminiLiveClient
+import com.mawa.assistant.security.BiometricManager
+import com.mawa.assistant.service.AccessibilityHelperService
 import com.mawa.assistant.service.CallMonitorService
 import com.mawa.assistant.service.MawaOverlayService
+import com.mawa.assistant.utils.ScreenReader
 import com.mawa.assistant.viewmodel.MainViewModel
 import java.text.SimpleDateFormat
 import java.util.*
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private val viewModel: MainViewModel by viewModels()
     private lateinit var geminiLive: GeminiLiveClient
@@ -47,6 +54,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var redOverlay: android.view.View
     private lateinit var settingsBtn: ImageButton
 
+    private var tts: TextToSpeech? = null
     private var isMuted = false
     private var isActiveMode = false
     private var isInCallMode = false
@@ -55,6 +63,17 @@ class MainActivity : AppCompatActivity() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var speechRecognizer: SpeechRecognizer? = null
+
+    companion object {
+        private const val TAG = "MAWA_SUPER"
+        private val INTERNAL_PATTERNS = listOf(
+            "**Confirming", "**Clarifying", "**Processing", "**Analyzing",
+            "I'm currently focused", "My immediate next step", "I need to ascertain",
+            "I'm confirming", "seems ambiguous", "implicitly request",
+            "intended recipient", "more specific contact", "misspelling of a contact",
+            "informal way to describe", "chain of thought"
+        )
+    }
 
     private val callEndedReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -79,28 +98,73 @@ class MainActivity : AppCompatActivity() {
         Manifest.permission.SEND_SMS,
         Manifest.permission.READ_PHONE_STATE,
         Manifest.permission.ANSWER_PHONE_CALLS,
-        Manifest.permission.CAMERA
+        Manifest.permission.CAMERA,
+        Manifest.permission.USE_BIOMETRIC
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // MYRA's Biometric Lock
+        BiometricManager.authenticate(this,
+            onSuccess = {
+                setupPostAuth()
+            },
+            onError = { msg: String ->
+                Toast.makeText(this, "Auth failed: $msg", Toast.LENGTH_LONG).show()
+                setupPostAuth() // Fallback to let user in for now
+            },
+            onFallback = {
+                setupPostAuth()
+            }
+        )
+    }
+
+    private fun setupPostAuth() {
         initViews()
         checkPermissions()
         startSystemServices()
         startStatusUpdates()
-        registerReceiver(callEndedReceiver, IntentFilter(CallMonitorService.ACTION_CALL_ENDED),
-            RECEIVER_NOT_EXPORTED)
+        tts = TextToSpeech(this, this)
+        checkDefaultAssistant()
+
+        registerReceiver(callEndedReceiver, IntentFilter(CallMonitorService.ACTION_CALL_ENDED), RECEIVER_NOT_EXPORTED)
 
         handler.postDelayed({ initGeminiLive() }, 300)
         handleIncomingCallIntent(intent)
 
         viewModel.commandResult.observe(this) { result ->
             if (result != null) {
-                geminiLive.sendText(result)
+                if (::geminiLive.isInitialized) geminiLive.sendText(result)
                 viewModel.clearResult()
             }
+        }
+    }
+
+    private fun isInternalMessage(text: String) = INTERNAL_PATTERNS.any { text.contains(it, ignoreCase = true) }
+
+    private fun getScreenContext(): String = try {
+        if (!AccessibilityHelperService.isEnabled(this)) ""
+        else ScreenReader.dump(AccessibilityHelperService.instance?.rootInActiveWindow)?.take(500)?.replace("\n", " ") ?: ""
+    } catch (_: Exception) { "" }
+
+    private fun checkDefaultAssistant() {
+        val a = Settings.Secure.getString(contentResolver, "assistant")
+        if (a == null || !a.contains(packageName)) {
+            AlertDialog.Builder(this)
+                .setTitle("Set MAWA as Default Assistant")
+                .setMessage("Power button se activate karne ke liye set karo.")
+                .setPositiveButton("Set") { _, _ -> startActivity(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS)) }
+                .setNegativeButton("Later", null)
+                .show()
+        }
+    }
+
+    override fun onInit(status: Int) {
+        if (status == TextToSpeech.SUCCESS) {
+            val r = tts?.setLanguage(Locale("bn", "BD"))
+            if (r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED) tts?.language = Locale("hi", "IN")
         }
     }
 
@@ -123,17 +187,11 @@ class MainActivity : AppCompatActivity() {
         chatRecycler.adapter = chatAdapter
 
         micButton.setOnClickListener { toggleMute() }
-        micButton.setOnLongClickListener {
-            interruptMawa()
-            true
-        }
+        micButton.setOnLongClickListener { interruptMawa(); true }
 
         sendBtn.setOnClickListener { sendTextMessage() }
         textInput.setOnEditorActionListener { _, actionId, _ ->
-            if (actionId == EditorInfo.IME_ACTION_SEND) {
-                sendTextMessage()
-                true
-            } else false
+            if (actionId == EditorInfo.IME_ACTION_SEND) { sendTextMessage(); true } else false
         }
 
         settingsBtn.setOnClickListener {
@@ -142,12 +200,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkPermissions() {
-        val missing = requiredPermissions.filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
-        if (missing.isNotEmpty()) {
-            ActivityCompat.requestPermissions(this, missing.toTypedArray(), 100)
-        }
+        val missing = requiredPermissions.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isNotEmpty()) ActivityCompat.requestPermissions(this, missing.toTypedArray(), 100)
     }
 
     private fun startSystemServices() {
@@ -157,9 +211,7 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) { }
     }
 
-    private fun startStatusUpdates() {
-        handler.post(statusUpdateRunnable)
-    }
+    private fun startStatusUpdates() { handler.post(statusUpdateRunnable) }
 
     private fun updateStatusBar() {
         val bm = getSystemService(BATTERY_SERVICE) as BatteryManager
@@ -171,14 +223,13 @@ class MainActivity : AppCompatActivity() {
         am.getMemoryInfo(memInfo)
         val usedMb = (memInfo.totalMem - memInfo.availMem) / (1024 * 1024)
         ramText.text = "RAM: ${usedMb}MB"
-
         timeText.text = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
     }
 
     private fun initGeminiLive() {
         val prefs = getSharedPreferences("mawa_prefs", MODE_PRIVATE)
-        val apiKey = "AIzaSyC0bEDWa-h_13GWo0k_PL1m5KIBpruMwKc"
-        val model = prefs.getString("gemini_model", "models/gemini-2.5-flash-native-audio-preview-12-2025") ?: "models/gemini-2.5-flash-native-audio-preview-12-2025"
+        val apiKey = prefs.getString("api_key", "") ?: ""
+        val model = prefs.getString("gemini_model", "models/gemini-2.0-flash-exp") ?: "models/gemini-2.0-flash-exp"
         val voice = prefs.getString("gemini_voice", "Aoede") ?: "Aoede"
         val userName = prefs.getString("user_name", "Boss") ?: "Boss"
         val personality = prefs.getString("personality_mode", "gf") ?: "gf"
@@ -214,17 +265,16 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        geminiLive.onAudioReceived = { pcmData ->
-            audioEngine.queueAudio(pcmData)
-        }
+        geminiLive.onAudioReceived = { pcmData -> audioEngine.queueAudio(pcmData) }
 
         geminiLive.onOutputTranscript = { text ->
-            outputBuffer.append(text)
+            // AI-এর উল্টোপাল্টা থিংকিং ফিল্টার করা হলো (MYRA-এর মতো)
+            if (!isInternalMessage(text)) {
+                outputBuffer.append(text)
+            }
         }
 
-        geminiLive.onInputTranscript = { text ->
-            inputBuffer.append(text)
-        }
+        geminiLive.onInputTranscript = { text -> inputBuffer.append(text) }
 
         geminiLive.onTurnComplete = {
             runOnUiThread {
@@ -234,9 +284,7 @@ class MainActivity : AppCompatActivity() {
                 if (input.isNotEmpty()) {
                     chatAdapter.addMessage(ChatMessage(input, isUser = true))
                     val command = CommandParser.parse(input)
-                    if (command != null) {
-                        viewModel.executeCommand(command)
-                    }
+                    if (command != null) viewModel.executeCommand(command)
                 }
                 if (output.isNotEmpty()) {
                     chatAdapter.addMessage(ChatMessage(output, isUser = false))
@@ -248,16 +296,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        geminiLive.onError = { error ->
-            runOnUiThread {
-                statusText.text = "Error: $error"
-            }
-        }
+        geminiLive.onError = { error -> runOnUiThread { statusText.text = "Error: $error" } }
 
         audioEngine.onAudioCaptured = { pcmData ->
-            if (!isInCallMode) {
-                geminiLive.sendAudio(pcmData)
-            }
+            if (!isInCallMode) geminiLive.sendAudio(pcmData)
         }
 
         audioEngine.onAmplitudeChanged = { amp ->
@@ -270,6 +312,12 @@ class MainActivity : AppCompatActivity() {
                 orbView.setState(OrbAnimationView.State.SPEAKING)
                 statusText.text = "Bol te ci..."
                 waveformView.startAnimation()
+                
+                // কথা বলার সময় স্ক্রিনের ডেটা (Screen Context) জেমিনিকে পাঠানো হলো
+                val ctx = getScreenContext()
+                if (ctx.isNotEmpty() && ::geminiLive.isInitialized) {
+                    geminiLive.sendText("[Screen Context: $ctx] Read this silently to help user.")
+                }
             }
         }
 
@@ -286,38 +334,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun buildSystemPrompt(userName: String, personality: String): String {
         val dateTime = SimpleDateFormat("EEEE, MMMM dd, yyyy hh:mm a", Locale.getDefault()).format(Date())
-        val personalityBlock = when (personality) {
-            "gf" -> """
-                You are MAWA, a caring AI companion. Speak in Banglish (Bangla + English mix).
-                Use: "tumar", "haa", "acha", "Obosshoi". Be warm, emotionally expressive.
-                Use emojis sparingly. Max 2-3 sentences. Sound natural when speaking aloud.
-                Examples: "Haa $userName! Akhoni koredissi", "Arre tumi ki dekeco! Bolo ki korte hobe"
-            """.trimIndent()
-            "professional" -> """
-                You are MAWA, a professional AI assistant. Formal English only.
-                Be precise and efficient. No emojis. Max 2 sentences.
-            """.trimIndent()
-            "assistant" -> """
-                You are MAWA, a friendly AI assistant. Use Banglish or English as appropriate.
-                Be balanced and helpful. Max 2-3 sentences.
-            """.trimIndent()
-            else -> ""
-        }
         return """
-            $personalityBlock
+            You are MAWA, a caring AI companion. Personality: $personality.
             Current date/time: $dateTime
             User's name: $userName
-            You are speaking ALOUD — keep responses natural and conversational.
+            Use Banglish (Bangla + English mix). Be warm, emotionally expressive.
+            NEVER say: "Confirming", "Clarifying", "Processing". Just act immediately.
+            You are speaking ALOUD — keep responses natural, conversational and SHORT.
         """.trimIndent()
     }
 
     private fun sendGreeting(userName: String, personality: String) {
-        val greeting = when (personality) {
-            "gf" -> "Hey $userName! Ami ase poreci. Ki help lagbe tumar?"
-            "professional" -> "Good day $userName. MAWA is online and ready to assist you."
-            "assistant" -> "Hello $userName! Ami holam MAWA. Ki vabe help korbo tumake?"
-            else -> "Hello $userName!"
-        }
+        val greeting = if (personality == "gf") "Hey $userName! Ami ase poreci. Ki help lagbe tumar?" else "Hello $userName!"
         geminiLive.sendText(greeting)
         orbView.setState(OrbAnimationView.State.THINKING)
         statusText.text = "Thinking..."
@@ -326,28 +354,19 @@ class MainActivity : AppCompatActivity() {
     private fun setActiveMode(active: Boolean) {
         isActiveMode = active
         val targetAlpha = if (active) 0.08f else 0f
-        ObjectAnimator.ofFloat(redOverlay, "alpha", redOverlay.alpha, targetAlpha).apply {
-            duration = if (active) 300 else 500
-            start()
-        }
+        ObjectAnimator.ofFloat(redOverlay, "alpha", redOverlay.alpha, targetAlpha).apply { duration = if (active) 300 else 500; start() }
     }
 
     private fun toggleMute() {
         isMuted = !isMuted
-        if (::audioEngine.isInitialized) {
-            audioEngine.setMuted(isMuted)
-        }
+        if (::audioEngine.isInitialized) audioEngine.setMuted(isMuted)
         micButton.setImageResource(if (isMuted) R.drawable.ic_mic_off else R.drawable.ic_mic_on)
         statusText.text = if (isMuted) "Mic muted" else "Sun te ci..."
     }
 
     private fun interruptMawa() {
-        if (::audioEngine.isInitialized) {
-            audioEngine.clearPlaybackQueue()
-        }
-        if (::geminiLive.isInitialized) {
-            geminiLive.sendInterrupt()
-        }
+        if (::audioEngine.isInitialized) audioEngine.clearPlaybackQueue()
+        if (::geminiLive.isInitialized) geminiLive.sendInterrupt()
         orbView.setState(OrbAnimationView.State.LISTENING)
         statusText.text = "Interrupted"
     }
@@ -360,15 +379,15 @@ class MainActivity : AppCompatActivity() {
         chatRecycler.scrollToPosition(chatAdapter.itemCount - 1)
 
         if (::geminiLive.isInitialized) {
-            geminiLive.sendText(text)
+            val ctx = getScreenContext()
+            val msgToSend = if (ctx.isNotEmpty()) "[Screen: $ctx] User: $text" else text
+            geminiLive.sendText(msgToSend)
             orbView.setState(OrbAnimationView.State.THINKING)
             statusText.text = "Thinking..."
         }
 
         val command = CommandParser.parse(text)
-        if (command != null) {
-            viewModel.executeCommand(command)
-        }
+        if (command != null) viewModel.executeCommand(command)
 
         textInput.text.clear()
     }
@@ -377,16 +396,14 @@ class MainActivity : AppCompatActivity() {
         isInCallMode = true
         if (::geminiLive.isInitialized) {
             geminiLive.sendText("Boss, $callerName der call asce. Uthabo naki reject korbo?")
+        } else {
+            tts?.speak("Boss, $callerName calling. Receive or reject?", TextToSpeech.QUEUE_FLUSH, null, "CALL")
         }
-
-        handler.postDelayed({
-            startCallDecisionSTT()
-        }, 4500)
+        handler.postDelayed({ startCallDecisionSTT() }, 4500)
     }
 
     private fun startCallDecisionSTT() {
         if (!SpeechRecognizer.isRecognitionAvailable(this)) return
-
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -398,19 +415,12 @@ class MainActivity : AppCompatActivity() {
             override fun onResults(results: Bundle?) {
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 val spoken = matches?.firstOrNull()?.lowercase() ?: ""
-
                 val acceptWords = listOf("uthao", "haa", "accept", "answer", "receive", "ha", "yes")
                 val rejectWords = listOf("reject", "na", "no", "bondho", "cancel", "decline")
 
                 when {
-                    acceptWords.any { spoken.contains(it) } -> {
-                        val result = viewModel.acceptCall()
-                        if (::geminiLive.isInitialized) geminiLive.sendText("Call accept korlam!")
-                    }
-                    rejectWords.any { spoken.contains(it) } -> {
-                        val result = viewModel.rejectCall()
-                        if (::geminiLive.isInitialized) geminiLive.sendText("Call reject korlam!")
-                    }
+                    acceptWords.any { spoken.contains(it) } -> { viewModel.acceptCall(); if (::geminiLive.isInitialized) geminiLive.sendText("Call accept korlam!") }
+                    rejectWords.any { spoken.contains(it) } -> { viewModel.rejectCall(); if (::geminiLive.isInitialized) geminiLive.sendText("Call reject korlam!") }
                 }
                 isInCallMode = false
                 setActiveMode(false)
@@ -421,14 +431,10 @@ class MainActivity : AppCompatActivity() {
             override fun onRmsChanged(rmsdB: Float) {}
             override fun onBufferReceived(buffer: ByteArray?) {}
             override fun onEndOfSpeech() {}
-            override fun onError(error: Int) {
-                isInCallMode = false
-                speechRecognizer?.destroy()
-            }
+            override fun onError(error: Int) { isInCallMode = false; speechRecognizer?.destroy() }
             override fun onPartialResults(partialResults: Bundle?) {}
             override fun onEvent(eventType: Int, params: Bundle?) {}
         })
-
         speechRecognizer?.startListening(intent)
     }
 
@@ -446,22 +452,19 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
-        if (::audioEngine.isInitialized) {
-            audioEngine.setMuted(true)
-        }
+        if (::audioEngine.isInitialized) audioEngine.setMuted(true)
     }
 
     override fun onResume() {
         super.onResume()
-        if (::audioEngine.isInitialized && !isMuted) {
-            audioEngine.setMuted(false)
-        }
+        if (::audioEngine.isInitialized && !isMuted) audioEngine.setMuted(false)
     }
 
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacksAndMessages(null)
-        unregisterReceiver(callEndedReceiver)
+        try { unregisterReceiver(callEndedReceiver) } catch (_: Exception) {}
+        tts?.shutdown()
         if (::geminiLive.isInitialized) geminiLive.release()
         if (::audioEngine.isInitialized) audioEngine.release()
         orbView.release()
