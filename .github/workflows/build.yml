@@ -18,6 +18,9 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
+    - name: Setup exact Gradle version
+      uses: gradle/actions/setup-gradle@v3
+
     - name: Build APK with Gradle
       run: gradle assembleDebug
 
