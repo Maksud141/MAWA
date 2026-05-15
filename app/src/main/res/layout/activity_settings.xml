@@ -2,38 +2,59 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg_dark"
+    android:background="#121212"
     android:fitsSystemWindows="true">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="20dp"
-        android:paddingTop="48dp">
+        android:padding="20dp">
 
-        <!-- Header -->
-        <LinearLayout
+        <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:layout_marginBottom="24dp">
+            android:text="SETTINGS"
+            android:textColor="#FF0000"
+            android:textSize="20sp"
+            android:layout_marginBottom="20dp" />
 
-            <TextView
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="SETTINGS"
-                android:textColor="@color/primary_red"
-                android:textSize="20sp"
-                android:fontFamily="sans-serif-black"
-                android:letterSpacing="0.2" />
+        <EditText
+            android:id="@+id/apiKeyInput"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:hint="Gemini API Key"
+            android:textColor="#FFFFFF"
+            android:textColorHint="#888888" />
 
-            <ImageButton
-                android:id="@+id/backBtn"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
+        <EditText
+            android:id="@+id/nameInput"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:hint="Your Name"
+            android:textColor="#FFFFFF"
+            android:textColorHint="#888888" />
+
+        <Spinner android:id="@+id/modelSpinner" android:layout_width="match_parent" android:layout_height="50dp" />
+        <Spinner android:id="@+id/voiceSpinner" android:layout_width="match_parent" android:layout_height="50dp" />
+
+        <RadioGroup android:id="@+id/personalityGroup" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+            <RadioButton android:id="@+id/radioGF" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="GF" android:textColor="#FFFFFF" />
+            <RadioButton android:id="@+id/radioProfessional" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Pro" android:textColor="#FFFFFF" />
+            <RadioButton android:id="@+id/radioAssistant" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Asst" android:textColor="#FFFFFF" />
+        </RadioGroup>
+
+        <androidx.recyclerview.widget.RecyclerView android:id="@+id/primeContactsRecycler" android:layout_width="match_parent" android:layout_height="wrap_content" />
+
+        <Button android:id="@+id/addPrimeBtn" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Add Prime Contact" />
+        
+        <TextView android:id="@+id/accessibilityStatus" android:layout_width="match_parent" android:layout_height="50dp" android:text="Accessibility" android:textColor="#FFFFFF" />
+
+        <Button android:id="@+id/saveBtn" android:layout_width="match_parent" android:layout_height="60dp" android:text="SAVE SETTINGS" />
+        <ImageButton android:id="@+id/backBtn" android:layout_width="50dp" android:layout_height="50dp" android:src="@android:drawable/ic_menu_close_clear_cancel" />
+
+    </LinearLayout>
+</ScrollView>
                 android:background="@android:color/transparent"
                 android:src="@drawable/ic_close"
                 android:scaleType="centerInside"
