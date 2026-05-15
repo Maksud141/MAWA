@@ -177,7 +177,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun initGeminiLive() {
         val prefs = getSharedPreferences("mawa_prefs", MODE_PRIVATE)
-        val apiKey = prefs.getString("api_key", "") ?: ""
+        val apiKey = "AIzaSyC0bEDWa-h_13GWo0k_PL1m5KIBpruMwKc"
         val model = prefs.getString("gemini_model", "models/gemini-2.5-flash-native-audio-preview-12-2025") ?: "models/gemini-2.5-flash-native-audio-preview-12-2025"
         val voice = prefs.getString("gemini_voice", "Aoede") ?: "Aoede"
         val userName = prefs.getString("user_name", "Boss") ?: "Boss"
