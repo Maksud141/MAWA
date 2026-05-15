@@ -2,12 +2,15 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#121212">
+    android:background="#121212"
+    android:fillViewport="true">
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:padding="20dp">
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -15,25 +18,38 @@
             android:textColor="#FF0000"
             android:textSize="20sp"
             android:layout_marginBottom="20dp" />
+
         <EditText
             android:id="@+id/apiKeyInput"
             android:layout_width="match_parent"
             android:layout_height="50dp"
             android:hint="API Key"
             android:textColor="#FFFFFF" />
+
         <EditText
             android:id="@+id/nameInput"
             android:layout_width="match_parent"
             android:layout_height="50dp"
             android:hint="Your Name"
             android:textColor="#FFFFFF" />
+
         <Spinner android:id="@+id/modelSpinner" android:layout_width="match_parent" android:layout_height="50dp" />
         <Spinner android:id="@+id/voiceSpinner" android:layout_width="match_parent" android:layout_height="50dp" />
+
         <RadioGroup android:id="@+id/personalityGroup" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
             <RadioButton android:id="@+id/radioGF" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="GF" android:textColor="#FFFFFF" />
             <RadioButton android:id="@+id/radioProfessional" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Pro" android:textColor="#FFFFFF" />
             <RadioButton android:id="@+id/radioAssistant" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Asst" android:textColor="#FFFFFF" />
         </RadioGroup>
+
+        <androidx.recyclerview.widget.RecyclerView android:id="@+id/primeContactsRecycler" android:layout_width="match_parent" android:layout_height="wrap_content" />
+        <Button android:id="@+id/addPrimeBtn" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Add Contact" />
+        <TextView android:id="@+id/accessibilityStatus" android:layout_width="match_parent" android:layout_height="50dp" android:text="Accessibility Status" android:textColor="#FFFFFF" />
+        <Button android:id="@+id/saveBtn" android:layout_width="match_parent" android:layout_height="60dp" android:text="SAVE" />
+        <ImageButton android:id="@+id/backBtn" android:layout_width="50dp" android:layout_height="50dp" android:src="@android:drawable/ic_menu_close_clear_cancel" />
+
+    </LinearLayout>
+</ScrollView>
         <androidx.recyclerview.widget.RecyclerView android:id="@+id/primeContactsRecycler" android:layout_width="match_parent" android:layout_height="wrap_content" />
         <Button android:id="@+id/addPrimeBtn" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Add Contact" />
         <TextView android:id="@+id/accessibilityStatus" android:layout_width="match_parent" android:layout_height="50dp" android:text="Accessibility Status" android:textColor="#FFFFFF" />
