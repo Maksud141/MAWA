@@ -57,9 +57,9 @@ class SettingsActivity : AppCompatActivity() {
         setContentView(R.layout.activity_settings)
 
         initViews()
-        loadSettings()
+        setupPrimeContacts() 
         setupSpinners()
-        setupPrimeContacts()
+        loadSettings()  
         updateAccessibilityStatus()
     }
 
